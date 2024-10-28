@@ -1,148 +1,137 @@
 from telethon import TelegramClient, events
 import re
-import time
-import requests
-from datetime import datetime
+import json
+import os
 
-# Replace with your own API ID, hash, and bot token
-api_id = '29400566'
-api_hash = '8fd30dc496aea7c14cf675f59b74ec6f'
-bot_token = '8036013708:AAGi7Px-PubjvKn4U_kJQA3T85iYKQdldlo'
+# Credentials for the Telegram Bot
+API_ID = '29400566'
+API_HASH = '8fd30dc496aea7c14cf675f59b74ec6f'
+BOT_TOKEN = '8036013708:AAFS9hs6s2vmfNZsMMVLLeh0HPnoqqaGa3o'
+BOT_OWNER_ID = 7202072688  # Replace with the Telegram ID of the bot owner
 
-# Initialize the client
-client = TelegramClient('bot', api_id, api_hash).start(bot_token=bot_token)
+# Initialize the Telegram Client
+client = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+
+# Paths to store registered and authorized users
+REGISTERED_USERS_FILE = "registered_users.json"
+AUTHORIZED_USERS_FILE = "authorized_users.json"
 
 # Regular expression to match card details in the format `number|exp_month|exp_year|cvc`
 card_pattern = re.compile(r"\b(\d{16})\|(\d{2})\|(\d{2,4})\|(\d{3,4})\b")
 
-# Function to check a card using the specified API token
-def check_card_api(card_number, exp_month, exp_year, cvc):
+def luhn_check(card_number):
+    """Uses the Luhn algorithm to validate a card number."""
+    total = 0
+    reverse_digits = card_number[::-1]
+    for i, digit in enumerate(reverse_digits):
+        n = int(digit)
+        if i % 2 == 1:
+            n = n * 2
+            if n > 9:
+                n -= 9
+        total += n
+    return total % 10 == 0
+
+def load_users(file_path):
+    """Loads users from a JSON file."""
+    if os.path.exists(file_path):
+        with open(file_path, 'r') as f:
+            return json.load(f)
+    return []
+
+def save_user(user_id, file_path):
+    """Adds a new user to a specified user list file."""
+    users = load_users(file_path)
+    if user_id not in users:
+        users.append(user_id)
+        with open(file_path, 'w') as f:
+            json.dump(users, f)
+
+def is_user_registered(user_id):
+    """Checks if a user is registered."""
+    return user_id in load_users(REGISTERED_USERS_FILE)
+
+def is_user_authorized(user_id):
+    """Checks if a user is authorized to bypass the card limit."""
+    return user_id in load_users(AUTHORIZED_USERS_FILE)
+
+@client.on(events.NewMessage(pattern='/start'))
+async def start(event):
+    """Sends a welcome message and registration prompt."""
+    user_id = event.sender_id
+    if is_user_registered(user_id):
+        await event.reply("❖ Welcome back to Oᴠᴇʀ ❖ Sᴛʀɪᴘᴇ ❖\n\nType /help to check card details using the Luhn algorithm.")
+    else:
+        await event.reply("❖ Welcome to Oᴠᴇʀ ❖ Sᴛʀɪᴘᴇ ❖\n\n❖ You need to register to use this bot.\nType /register to get started.")
+
+@client.on(events.NewMessage(pattern='/register'))
+async def register(event):
+    """Registers the user if they are not already registered."""
+    user_id = event.sender_id
+    if is_user_registered(user_id):
+        await event.reply("❖ You are already registered! ✓")
+    else:
+        save_user(user_id, REGISTERED_USERS_FILE)
+        await event.reply("❖ Registration successful! ✓\nYou can now use the bot.\nType /help for instructions.")
+
+@client.on(events.NewMessage(pattern='/auth'))
+async def authorize_user(event):
+    """Allows the bot owner to authorize a user to bypass the card limit."""
+    user_id = event.sender_id
+    if user_id != BOT_OWNER_ID:
+        await event.reply("❖ You are not authorized to use this command. ✖")
+        return
+
     try:
-        url = "https://api.paymentprovider.com/validate"  # Assuming endpoint
-        headers = {"Authorization": "Bearer 896d15c1-2f42-4e5f-ab5c-dbf7ffdf137f"}
-        data = {
-            "card_number": card_number,
-            "exp_month": exp_month,
-            "exp_year": exp_year,
-            "cvc": cvc,
-        }
-        response = requests.post(url, headers=headers, json=data)
-        
-        if response.status_code == 200:
-            result = response.json()
-            if result.get("status") == "approved":
-                return True, "CVV LIVE"
-            else:
-                return False, "Declined"
-        else:
-            return False, f"Error: {response.json().get('message', 'Unknown error')}"
-    except Exception as e:
-        return False, str(e)
+        target_user_id = int(event.message.message.split()[1])
+        save_user(target_user_id, AUTHORIZED_USERS_FILE)
+        await event.reply(f"❖ User {target_user_id} has been authorized to send more than 30 cards. ✓")
+    except (IndexError, ValueError):
+        await event.reply("❖ Please provide a valid user ID. Usage: /auth <user_id>")
 
-# Simulated card information response format
-def generate_response(card_number, exp_month, exp_year, cvc, approval_status, response_message=""):
-    card_info = "VISA - CREDIT - PLATFORM"  # Example card info
-    issuer = "CTBC BANK CO., LTD. 🏛"  # Example issuer
-    country = "TAIWAN - 🇹🇼"  # Example country
-    gateway = "Payment API"  # Custom gateway description
-    checked_by = "Fʟᴀsʜ 🝮︎︎︎︎︎︎︎ Sʜɪɴᴇ [ Owner ]"
-    time_taken = round(time.time() % 60, 2)  # Simulated time for demo
-    time_checked = datetime.now().strftime("%H:%M:%S")
-
-    approval_text = "𝗔𝗽𝗽𝗿𝗼𝘃𝗲𝗱 ✅" if approval_status else "𝗗𝗲𝗰𝗹𝗶𝗻𝗲𝗱 ❌"
-
-    return f"""{approval_text}
-
-𝗖𝗮𝗿𝗱: {card_number}|{exp_month}|{exp_year}|{cvc}
-𝗚𝗮𝘁𝗲𝘄𝗮𝘆: {gateway}
-𝗥𝗲𝘀𝗽𝗼𝗻𝘀𝗲: {response_message}
-
-𝗜𝗻𝗳𝗼: {card_info}
-𝗜𝘀𝘀𝘂𝗲𝗿: {issuer}
-𝗖𝗼𝘂𝗻𝘁𝗿𝘆: {country}
-
-𝗧𝗶𝗺𝗲: {time_taken} 𝚂𝚎𝚌𝚘𝚗𝚍𝚜
-𝗖𝗵𝗲𝗰𝗸𝗲𝗱 𝗕𝘆: {checked_by}"""
-
-@client.on(events.NewMessage(pattern='/chk1'))
-async def chk1(event):
-    await event.reply("Please send the card details in this format:\n\n`card_number|exp_month|exp_year|cvc`")
-
-@client.on(events.NewMessage(pattern='/chk2'))
-async def chk2(event):
-    await event.reply("Please send the list of card details. Each card should be on a new line in this format:\n\n`card_number|exp_month|exp_year|cvc`")
+@client.on(events.NewMessage(pattern='/help'))
+async def help_command(event):
+    """Provides instructions for using the bot."""
+    user_id = event.sender_id
+    if is_user_registered(user_id):
+        await event.reply("❖ Send your card details, one per line, in this format:\n\n`card_number|exp_month|exp_year|cvc`\n\nThe bot will automatically check each card using the Luhn algorithm. ✦ You can send up to 30 cards unless authorized by the bot owner.")
+    else:
+        await event.reply("❖ You need to register to use this bot. Type /register to get started.")
 
 @client.on(events.NewMessage)
 async def card_check_handler(event):
-    text = event.raw_text.strip()
-    
-    # Single card check if initiated with /chk1
-    if text.startswith("/chk1"):
-        card_data = text.split()[-1]
-        if "|" in card_data:
-            card_number, exp_month, exp_year, cvc = card_data.split('|')
-            approval_status, response_message = check_card_api(card_number, exp_month, exp_year, cvc)
-            response = generate_response(card_number, exp_month, exp_year, cvc, approval_status, response_message)
-            await event.reply(response)
-        else:
-            await event.reply("Invalid card format. Please use `card_number|exp_month|exp_year|cvc`.")
-
-    # Mass card check if initiated with /chk2
-    elif text.startswith("/chk2"):
-        lines = text.splitlines()[1:]  # Remove the /chk2 command line
-        results = []
-        
-        if len(lines) > 30:
-            await event.reply("❌ Please limit to 30 card numbers for the mass check.")
-            return
-
-        for line in lines:
-            card_data = line.strip()
-            if "|" in card_data:
-                try:
-                    card_number, exp_month, exp_year, cvc = card_data.split('|')
-                    approval_status, response_message = check_card_api(card_number, exp_month, exp_year, cvc)
-                    response = generate_response(card_number, exp_month, exp_year, cvc, approval_status, response_message)
-                    results.append(response)
-                except ValueError:
-                    results.append("❌ Invalid format for line: " + line)
-            else:
-                results.append("❌ Invalid format for line: " + line)
-        
-        # Send results in batches
-        batch_size = 5
-        for i in range(0, len(results), batch_size):
-            batch = "\n\n".join(results[i:i + batch_size])
-            await event.reply(batch)
-
-@client.on(events.NewMessage(pattern='/scr'))
-async def scrape_cards(event):
-    command = event.raw_text.split()
-    if len(command) < 2:
-        await event.reply("Please specify a channel name, e.g., `/scr @channelname`")
+    """Automatically processes card details sent by the user using the Luhn algorithm if they are registered."""
+    user_id = event.sender_id
+    if not is_user_registered(user_id):
+        await event.reply("❖ You need to register to use this bot. Type /register to get started.")
         return
-    
-    channel_name = command[1]
-    try:
-        scraped_cards = []
-        async for message in client.iter_messages(channel_name, limit=2500):
-            if message.text:
-                cards = card_pattern.findall(message.text)
-                if cards:
-                    scraped_cards.extend(["|".join(card) for card in cards])
 
-        if scraped_cards:
-            batch_size = 50
-            for i in range(0, len(scraped_cards), batch_size):
-                batch = "\n".join(scraped_cards[i:i + batch_size])
-                await event.reply(f"Scraped cards from {channel_name}:\n\n{batch}")
+    text = event.raw_text.strip()
+    lines = text.splitlines()
+
+    # Check if user is authorized to bypass the limit
+    if len(lines) > 30 and not is_user_authorized(user_id):
+        await event.reply("❖ You are limited to 30 cards at a time. ✖\nPlease reduce the number of cards or request authorization.")
+        return
+
+    results = []
+    for line in lines:
+        card_data = line.strip()
+        if "|" in card_data:
+            try:
+                card_number, exp_month, exp_year, cvc = card_data.split('|')
+                if luhn_check(card_number):
+                    results.append(f"❖ Approved ✓ - Card: {card_number}|{exp_month}|{exp_year}|{cvc}")
+                else:
+                    results.append(f"❖ Declined ✖ - Card: {card_number}|{exp_month}|{exp_year}|{cvc}")
+            except ValueError:
+                results.append("❖ Invalid format for line: " + line)
         else:
-            await event.reply(f"No cards found in the channel {channel_name}.")
+            results.append("❖ Invalid format for line: " + line)
 
-    except Exception as e:
-        await event.reply(f"Error accessing channel {channel_name}: {str(e)}")
+    # Send the results back to the user
+    await event.reply("\n".join(results))
 
 # Start the bot
 client.start()
 client.run_until_disconnected()
-                         
