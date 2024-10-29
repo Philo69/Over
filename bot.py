@@ -1,137 +1,161 @@
-from telethon import TelegramClient, events
+import telebot
+import requests
 import re
-import json
-import os
+import random
+import string
+from datetime import datetime, timedelta
 
-# Credentials for the Telegram Bot
-API_ID = '29400566'
-API_HASH = '8fd30dc496aea7c14cf675f59b74ec6f'
-BOT_TOKEN = '8036013708:AAFS9hs6s2vmfNZsMMVLLeh0HPnoqqaGa3o'
-BOT_OWNER_ID = 7202072688  # Replace with the Telegram ID of the bot owner
+# Replace with your actual Telegram Bot API token and the bot owner's user ID
+api_token = '8036013708:AAHSZQQh7dnW5pT7_oBsPqCO1Z7NvO0WGiI'
+bot_owner_id = 123456789  # Replace with the bot owner's Telegram user ID
+bot = telebot.TeleBot(api_token)
 
-# Initialize the Telegram Client
-client = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+# Store registered and premium users
+registered_users = set()
+premium_users = set()
+redeem_codes = {}  # Structure: {'CODE': {'uses': 1, 'expiry': datetime}}
 
-# Paths to store registered and authorized users
-REGISTERED_USERS_FILE = "registered_users.json"
-AUTHORIZED_USERS_FILE = "authorized_users.json"
+# Expanded list of payment gateways
+payment_gateways = [
+    "paypal", "stripe", "braintree", "square", "cybersource", "authorize.net", "2checkout", "adyen",
+    "worldpay", "sagepay", "checkout.com", "shopify", "razorpay", "bolt", "paytm", "venmo",
+    "pay.google.com", "revolut", "eway", "woocommerce", "upi", "apple.com", "payflow", "payeezy",
+    "paddle", "payoneer", "recurly", "klarna", "paysafe", "webmoney", "payeer", "payu", "skrill",
+    "affirm", "afterpay", "dwolla", "global payments", "moneris", "nmi", "payment cloud",
+    "paysimple", "paytrace", "stax", "alipay", "bluepay", "paymentcloud", "clover",
+    "zelle", "google pay", "cashapp", "wechat pay", "transferwise", "stripe connect",
+    "mollie", "sezzle", "afterpay", "payza", "gocardless", "bitpay", "sureship"
+]
 
-# Regular expression to match card details in the format `number|exp_month|exp_year|cvc`
-card_pattern = re.compile(r"\b(\d{16})\|(\d{2})\|(\d{2,4})\|(\d{3,4})\b")
+def is_valid_url(url):
+    """Check if the URL is valid."""
+    regex = re.compile(
+        r'^(?:http|ftp)s?://'  
+        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|'  
+        r'localhost|'  
+        r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|'  
+        r'\[?[A-F0-9]*:[A-F0-9:]+\]?)'  
+        r'(?::\d+)?'  
+        r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+    return re.match(regex, url) is not None
 
-def luhn_check(card_number):
-    """Uses the Luhn algorithm to validate a card number."""
-    total = 0
-    reverse_digits = card_number[::-1]
-    for i, digit in enumerate(reverse_digits):
-        n = int(digit)
-        if i % 2 == 1:
-            n = n * 2
-            if n > 9:
-                n -= 9
-        total += n
-    return total % 10 == 0
-
-def load_users(file_path):
-    """Loads users from a JSON file."""
-    if os.path.exists(file_path):
-        with open(file_path, 'r') as f:
-            return json.load(f)
-    return []
-
-def save_user(user_id, file_path):
-    """Adds a new user to a specified user list file."""
-    users = load_users(file_path)
-    if user_id not in users:
-        users.append(user_id)
-        with open(file_path, 'w') as f:
-            json.dump(users, f)
-
-def is_user_registered(user_id):
-    """Checks if a user is registered."""
-    return user_id in load_users(REGISTERED_USERS_FILE)
-
-def is_user_authorized(user_id):
-    """Checks if a user is authorized to bypass the card limit."""
-    return user_id in load_users(AUTHORIZED_USERS_FILE)
-
-@client.on(events.NewMessage(pattern='/start'))
-async def start(event):
-    """Sends a welcome message and registration prompt."""
-    user_id = event.sender_id
-    if is_user_registered(user_id):
-        await event.reply("❖ Welcome back to Oᴠᴇʀ ❖ Sᴛʀɪᴘᴇ ❖\n\nType /help to check card details using the Luhn algorithm.")
+@bot.message_handler(commands=['start'])
+def cmd_start(message):
+    """Welcome message with registration prompt."""
+    user_id = message.from_user.id
+    if user_id in registered_users:
+        bot.send_message(message.chat.id, "メ Welcome back! You are already registered. Send a URL to analyze.")
     else:
-        await event.reply("❖ Welcome to Oᴠᴇʀ ❖ Sᴛʀɪᴘᴇ ❖\n\n❖ You need to register to use this bot.\nType /register to get started.")
+        bot.send_message(
+            message.chat.id,
+            f"メ Welcome To Oᴠᴇʀ ❖ Sᴛʀɪᴘᴇ, {message.from_user.first_name}! 👋\n\n"
+            "Please register to start using the bot by sending /register.\n"
+            "For premium features, use a redeem code if you have one with /redeem <code>."
+        )
 
-@client.on(events.NewMessage(pattern='/register'))
-async def register(event):
-    """Registers the user if they are not already registered."""
-    user_id = event.sender_id
-    if is_user_registered(user_id):
-        await event.reply("❖ You are already registered! ✓")
+@bot.message_handler(commands=['register'])
+def cmd_register(message):
+    """Register the user to allow access."""
+    user_id = message.from_user.id
+    if user_id not in registered_users:
+        registered_users.add(user_id)
+        bot.send_message(message.chat.id, "♁ Registration successful! You can now send a URL to analyze.")
     else:
-        save_user(user_id, REGISTERED_USERS_FILE)
-        await event.reply("❖ Registration successful! ✓\nYou can now use the bot.\nType /help for instructions.")
+        bot.send_message(message.chat.id, "You are already registered! Send a URL to analyze.")
 
-@client.on(events.NewMessage(pattern='/auth'))
-async def authorize_user(event):
-    """Allows the bot owner to authorize a user to bypass the card limit."""
-    user_id = event.sender_id
-    if user_id != BOT_OWNER_ID:
-        await event.reply("❖ You are not authorized to use this command. ✖")
+@bot.message_handler(commands=['redeem'])
+def cmd_redeem(message):
+    """Redeem a code for premium access."""
+    user_id = message.from_user.id
+    if user_id in premium_users:
+        bot.send_message(message.chat.id, "You already have premium access!")
         return
-
+    
     try:
-        target_user_id = int(event.message.message.split()[1])
-        save_user(target_user_id, AUTHORIZED_USERS_FILE)
-        await event.reply(f"❖ User {target_user_id} has been authorized to send more than 30 cards. ✓")
-    except (IndexError, ValueError):
-        await event.reply("❖ Please provide a valid user ID. Usage: /auth <user_id>")
-
-@client.on(events.NewMessage(pattern='/help'))
-async def help_command(event):
-    """Provides instructions for using the bot."""
-    user_id = event.sender_id
-    if is_user_registered(user_id):
-        await event.reply("❖ Send your card details, one per line, in this format:\n\n`card_number|exp_month|exp_year|cvc`\n\nThe bot will automatically check each card using the Luhn algorithm. ✦ You can send up to 30 cards unless authorized by the bot owner.")
-    else:
-        await event.reply("❖ You need to register to use this bot. Type /register to get started.")
-
-@client.on(events.NewMessage)
-async def card_check_handler(event):
-    """Automatically processes card details sent by the user using the Luhn algorithm if they are registered."""
-    user_id = event.sender_id
-    if not is_user_registered(user_id):
-        await event.reply("❖ You need to register to use this bot. Type /register to get started.")
-        return
-
-    text = event.raw_text.strip()
-    lines = text.splitlines()
-
-    # Check if user is authorized to bypass the limit
-    if len(lines) > 30 and not is_user_authorized(user_id):
-        await event.reply("❖ You are limited to 30 cards at a time. ✖\nPlease reduce the number of cards or request authorization.")
-        return
-
-    results = []
-    for line in lines:
-        card_data = line.strip()
-        if "|" in card_data:
-            try:
-                card_number, exp_month, exp_year, cvc = card_data.split('|')
-                if luhn_check(card_number):
-                    results.append(f"❖ Approved ✓ - Card: {card_number}|{exp_month}|{exp_year}|{cvc}")
-                else:
-                    results.append(f"❖ Declined ✖ - Card: {card_number}|{exp_month}|{exp_year}|{cvc}")
-            except ValueError:
-                results.append("❖ Invalid format for line: " + line)
+        code = message.text.split()[1]
+        if code in redeem_codes:
+            redeem_info = redeem_codes[code]
+            # Check if the code is expired
+            if redeem_info['expiry'] < datetime.now():
+                bot.send_message(message.chat.id, "This redeem code has expired.")
+                del redeem_codes[code]  # Remove expired code
+            elif redeem_info['uses'] > 0:
+                redeem_info['uses'] -= 1
+                premium_users.add(user_id)
+                bot.send_message(message.chat.id, "♁ Redeem successful! You now have premium access.")
+                if redeem_info['uses'] == 0:
+                    del redeem_codes[code]  # Remove code if no uses are left
+            else:
+                bot.send_message(message.chat.id, "This redeem code has no remaining uses.")
         else:
-            results.append("❖ Invalid format for line: " + line)
+            bot.send_message(message.chat.id, "Invalid redeem code.")
+    except IndexError:
+        bot.send_message(message.chat.id, "Please provide a redeem code. Usage: /redeem <code>")
 
-    # Send the results back to the user
-    await event.reply("\n".join(results))
+@bot.message_handler(commands=['generate_redeem_code'])
+def cmd_generate_redeem_code(message):
+    """Generate a redeem code with expiry for premium access (Owner only)."""
+    if message.from_user.id != bot_owner_id:
+        bot.send_message(message.chat.id, "You are not authorized to generate redeem codes.")
+        return
+    
+    try:
+        # Example usage: /generate_redeem_code <uses> <expiry in hours>
+        _, uses, expiry_hours = message.text.split()
+        uses = int(uses)
+        expiry_hours = int(expiry_hours)
+        # Generate a code in the format OVERSTRIPE-XXXX-XXXX
+        code = f"OVERSTRIPE-{''.join(random.choices(string.ascii_uppercase + string.digits, k=4))}-{''.join(random.choices(string.ascii_uppercase + string.digits, k=4))}"
+        expiry_time = datetime.now() + timedelta(hours=expiry_hours)
 
-# Start the bot
-client.start()
-client.run_until_disconnected()
+        redeem_codes[code] = {'uses': uses, 'expiry': expiry_time}
+        bot.send_message(
+            message.chat.id, 
+            f"♁ Redeem Code Generated: {code}\n"
+            f"Valid for: {uses} use(s)\n"
+            f"Expires in: {expiry_hours} hour(s)"
+        )
+    except ValueError:
+        bot.send_message(message.chat.id, "Invalid format. Usage: /generate_redeem_code <uses> <expiry in hours>")
+
+@bot.message_handler(content_types=['text'])
+def handle_text(message):
+    """Handle text messages and check if user is registered or has premium access."""
+    user_id = message.from_user.id
+    if user_id not in registered_users:
+        bot.send_message(message.chat.id, "Please register first by sending /register.")
+        return
+
+    if user_id in premium_users:
+        # Provide premium analysis, such as advanced data if desired
+        bot.send_message(message.chat.id, "♁ Premium analysis activated for this URL.")
+    
+    url = message.text.strip()
+    if not is_valid_url(url):
+        bot.send_message(message.chat.id, "Please provide a valid URL.")
+        return
+    
+    # Call `check_url` function here to analyze the URL...
+    # Assuming `check_url` is implemented as in the original code
+
+    # Example response after checking the URL
+    detected_gateways, status_code, captcha, cloudflare, payment_security_type, cvv_cvc_status, inbuilt_status = check_url(url)
+
+    gateways_str = ', '.join(detected_gateways) if detected_gateways else "None"
+    response_message = (
+        f"♁ Gateways Fetched Successfully ✅\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"♁ URL: {url}\n"
+        f"♁ Payment Gateways: {gateways_str}\n"
+        f"♁ Captcha Detected: {captcha}\n"
+        f"♁ Cloudflare Detected: {cloudflare}\n"
+        f"♁ Payment Security Type: {payment_security_type}\n"
+        f"♁ CVV/CVC Requirement: {cvv_cvc_status}\n"
+        f"♁ Inbuilt Payment System: {inbuilt_status}\n"
+        f"♁ Status Code: {status_code}\n"
+        f"Bot by: Random"
+    )
+    
+    bot.send_message(message.chat.id, response_message)
+
+bot.polling()
