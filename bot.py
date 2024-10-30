@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timedelta
 
 # Replace with your actual Telegram Bot API token and the bot owner's user ID
-api_token = '8036013708:AAHeC-NzIZUDUi7cJ2cI4FMaK9zHhJsjWI0'
+api_token = '8036013708:AAEEZWzJBjaAvDfUgsKAPiFEV5psU1KSD_o'
 bot_owner_id = 7202072688  # Bot owner's Telegram user ID
 bot = telebot.TeleBot(api_token)
 
@@ -77,48 +77,78 @@ def analyze_url(url, chat_id):
         logging.error("Error in analyzing URL: %s", str(e))
         bot.send_message(chat_id, "❖ **An Error Occurred While Processing The URL. Please Try Again.**", parse_mode="Markdown")
 
-# Handler for /generate command for bot owner to generate redeem codes
-@bot.message_handler(commands=['generate'])
-def cmd_generate(message):
-    if message.from_user.id != bot_owner_id:
-        bot.send_message(message.chat.id, "❖ **You Are Not Authorized To Generate Redeem Codes.**", parse_mode="Markdown")
-        return
-
+# Handler for /check command to analyze a provided URL
+@bot.message_handler(commands=['check'])
+def cmd_check(message):
     try:
-        # Example usage: /generate <uses> <expiry in hours/days>
-        _, uses, expiry = message.text.split()
-        uses = int(uses)
-
-        # Check if expiry is in days or hours
-        if expiry.lower().endswith("d"):
-            expiry_days = int(expiry[:-1])  # Get number of days
-            expiry_time = datetime.now() + timedelta(days=expiry_days)
-            time_unit = f"{expiry_days} Day(s)"
-        elif expiry.lower().endswith("h"):
-            expiry_hours = int(expiry[:-1])  # Get number of hours
-            expiry_time = datetime.now() + timedelta(hours=expiry_hours)
-            time_unit = f"{expiry_hours} Hour(s)"
-        else:
-            bot.send_message(message.chat.id, "❖ **Invalid Format. Usage: /generate <uses> <expiry in hours or days (e.g., 48h or 2d)>**", parse_mode="Markdown")
+        user_id = message.from_user.id
+        if user_id not in registered_users:
+            bot.send_message(message.chat.id, "❖ **Please Register First By Sending /register.**", parse_mode="Markdown")
             return
 
-        # Generate the redeem code
-        code = f"OVERSTRIPE-{''.join(random.choices(string.ascii_uppercase + string.digits, k=4))}-{''.join(random.choices(string.ascii_uppercase + string.digits, k=4))}"
-        
-        # Save redeem code with expiry
-        redeem_codes[code] = {'uses': uses, 'expiry': expiry_time}
-        save_data()
-        bot.send_message(
-            message.chat.id, 
-            f"❖ **Redeem Code Generated: `{code}`**\n"
-            f"❖ **Valid For: {uses} Use(s)**\n"
-            f"❖ **Expires In: {time_unit}**",
-            parse_mode="Markdown"
-        )
-    except ValueError:
-        bot.send_message(message.chat.id, "❖ **Invalid Format. Usage: /generate <uses> <expiry in hours or days (e.g., 48h or 2d)>**", parse_mode="Markdown")
+        try:
+            url = message.text.split()[1]
+        except IndexError:
+            bot.send_message(message.chat.id, "❖ **Please Provide A URL To Check. Usage: /check <URL>**", parse_mode="Markdown")
+            return
+
+        if is_valid_url(url):
+            bot.send_message(message.chat.id, "❖ **Processing URL...**", parse_mode="Markdown")
+            analyze_url(url, message.chat.id)
+        else:
+            bot.send_message(message.chat.id, "❖ **Invalid URL Format. Please Provide A Valid URL.**", parse_mode="Markdown")
     except Exception as e:
-        logging.error("Error in /generate command: %s", str(e))
+        logging.error("Error in /check command: %s", str(e))
+
+# Handler for /register command
+@bot.message_handler(commands=['register'])
+def cmd_register(message):
+    try:
+        user_id = message.from_user.id
+        if user_id not in registered_users:
+            registered_users.add(user_id)
+            save_data()
+            bot.send_message(message.chat.id, "❖ **Registration Successful! You Can Now Use The /check Command To Analyze URLs.**", parse_mode="Markdown")
+        else:
+            bot.send_message(message.chat.id, "❖ **You Are Already Registered! Use /check To Analyze URLs.**", parse_mode="Markdown")
+    except Exception as e:
+        logging.error("Error in /register command: %s", str(e))
+
+# Handler for /redeem command for redeeming premium codes
+@bot.message_handler(commands=['redeem'])
+def cmd_redeem(message):
+    try:
+        user_id = message.from_user.id
+        if user_id in premium_users:
+            bot.send_message(message.chat.id, "❖ **You Already Have Premium Access!**", parse_mode="Markdown")
+            return
+        
+        try:
+            code = message.text.split()[1]
+        except IndexError:
+            bot.send_message(message.chat.id, "❖ **Please Provide A Redeem Code. Usage: /redeem <code>**", parse_mode="Markdown")
+            return
+
+        if code in redeem_codes:
+            redeem_info = redeem_codes[code]
+            if redeem_info['expiry'] < datetime.now():
+                bot.send_message(message.chat.id, "❖ **This Redeem Code Has Expired.**", parse_mode="Markdown")
+                del redeem_codes[code]
+                save_data()
+            elif redeem_info['uses'] > 0:
+                redeem_info['uses'] -= 1
+                premium_users.add(user_id)
+                save_data()
+                bot.send_message(message.chat.id, "❖ **Redeem Successful! You Now Have Premium Access.**", parse_mode="Markdown")
+                if redeem_info['uses'] == 0:
+                    del redeem_codes[code]
+                    save_data()
+            else:
+                bot.send_message(message.chat.id, "❖ **This Redeem Code Has No Remaining Uses.**", parse_mode="Markdown")
+        else:
+            bot.send_message(message.chat.id, "❖ **Invalid Redeem Code.**", parse_mode="Markdown")
+    except Exception as e:
+        logging.error("Error in /redeem command: %s", str(e))
 
 # Handler for /cmds command to list all available commands
 @bot.message_handler(commands=['cmds'])
@@ -128,30 +158,16 @@ def cmd_cmds(message):
         "❖ **/start** - Start The Bot And Receive A Welcome Message.\n"
         "❖ **/register** - Register Yourself To Use The Bot’s Basic Features.\n"
         "❖ **/redeem <code>** - Redeem A Premium Code For Advanced Features.\n"
+        "❖ **/check <URL>** - Analyze A URL.\n"
         "❖ **/generate <uses> <expiry in hours/days>** - *Bot Owner Only:* Generate A Redeem Code With A Set Number Of Uses And Expiration Time.\n\n"
-        "❖ **How To Use:**\n"
-        "   - Send A URL Directly To Analyze It.\n"
         "❖ **For Any Questions, Contact The Developer: [TechPiro](https://t.me/TechPiro)**"
     )
     bot.send_message(message.chat.id, help_message, parse_mode="Markdown")
 
-# Handler for direct text input for URL analysis
+# Ignore other text inputs
 @bot.message_handler(content_types=['text'])
 def handle_text(message):
-    try:
-        user_id = message.from_user.id
-        if user_id not in registered_users:
-            bot.send_message(message.chat.id, "❖ **Please Register First By Sending /register.**", parse_mode="Markdown")
-            return
-
-        url = message.text.strip()
-        if is_valid_url(url):
-            bot.send_message(message.chat.id, "❖ **Auto-Detect: Processing URL...**", parse_mode="Markdown")
-            analyze_url(url, message.chat.id)
-        else:
-            bot.send_message(message.chat.id, "❖ **Invalid Input. Please Send A Valid URL Or Use A Command.**", parse_mode="Markdown")
-    except Exception as e:
-        logging.error("Error in handling text message: %s", str(e))
+    pass  # Ignore all non-command messages
 
 # Use a loop to ensure continuous polling
 while True:
@@ -160,4 +176,3 @@ while True:
     except Exception as e:
         logging.error("Polling error: %s", str(e))
         time.sleep(5)  # Wait a bit before restarting polling
-                  
